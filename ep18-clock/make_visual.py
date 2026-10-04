@@ -15,9 +15,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import brand  # noqa: E402
 
 W, H = brand.W, brand.H
-MAIN = "古い柱時計の振り子の音"
-ELEMENTS = "コチコチだけ・チャイムなし"
-EN_LINE = "Old Pendulum Wall Clock  ·  ticking only, no chime"
+MAIN = "古い柱時計と窓の外の小雨"
+ELEMENTS = "1秒ごとのコチコチ・チャイムなし"
+EN_LINE = "Old Pendulum Wall Clock & Gentle Rain  ·  no chime"
 
 CX = 1480  # 柱と時計の中心
 DIAL_C = (CX, 330)
