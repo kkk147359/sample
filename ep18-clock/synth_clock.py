@@ -17,15 +17,21 @@ SR = 44100
 # 速さ：A＝柱時計（1分に約100打）、B＝ゆっくり（大きな振り子、1分に約60打）
 SPEEDS = {"A": (0.57, 0.63), "B": (0.97, 1.03)}
 
-# 金属の部品の響き（Hz, 減衰の時定数 s, 相対の強さ dB）：チク用・タク用で少しずつ違う
-METAL = {
-    0: [(640, 0.0208, -2), (820, 0.0176, 0), (1010, 0.0144, -5), (1230, 0.0144, -3), (1660, 0.012, -4), (2150, 0.0096, -7),
-        (2680, 0.0072, -9), (3240, 0.0056, -6), (3950, 0.004, -11), (4720, 0.0032, -16)],
-    1: [(610, 0.0216, 0), (790, 0.0184, -3), (960, 0.0152, -5), (1180, 0.0144, -2), (1730, 0.0112, -6), (2050, 0.0096, -8),
-        (2610, 0.0072, -10), (3150, 0.0056, -7), (3830, 0.004, -12), (4600, 0.0032, -17)],
+# v2（10/4 社長「時計の音とはかけ離れている」を受けて作り直し）
+# v1 は減衰する正弦波（響きの山）だけで作ったため、音が「ピッ」という音程のある音になっていた。
+# 実録音の打音は、1打の中に細かいカチカチ（0.1〜0.3msの鋭い音）が数ms のあいだに何度も続く、雑音に近い音
+# （20msのスペクトル平坦度：実録音 0.04〜0.26、v1 0.001）。
+# v2 は「細かいカチカチの列」×「雑音でできた短い響き（帯域ごとに減衰の速さが違う）」で作り、
+# 最後に実録音（#456236 の柱時計）の 1/3 オクターブ配分に合わせる補正フィルタをかける。
+
+# 目標の 1/3 オクターブ配分（打音の直後50ms、最大を0dB）。31.5Hz〜12.7kHz の27帯域。
+# #456236（柱時計）のチク／タクをもとに、木の箱の低めの響き（#32937）を 200〜500Hz に少し足し、
+# 企画の条件どおり 3kHz より上を 3〜6dB 下げた値。
+CENTERS = 1000 * 2.0 ** (np.arange(-15, 12) / 3)
+TARGET = {
+    0: [-45, -45, -45, -45, -42, -38, -34, -30, -22, -18, -18, -14, -12, -4, 0, -3, -5, -3, -3, -8, -12, -17, -23, -22, -24, -35, -42],
+    1: [-45, -45, -45, -45, -42, -38, -34, -30, -24, -20, -20, -18, -14, -3, 0, -2, -4, 0, -2, -7, -10, -15, -15, -20, -22, -30, -33],
 }
-# 木の箱の響き（チク・タク共通、箱は同じ）
-WOOD = [(104, 0.060, -15), (162, 0.052, -13), (221, 0.046, -10), (340, 0.038, -12), (470, 0.032, -10), (585, 0.028, -11)]
 
 
 def schedule(total, speed, seed):
@@ -46,40 +52,94 @@ def schedule(total, speed, seed):
     return np.array(ts), np.array(kind)
 
 
-def _modes(t, modes, rng, spread):
-    out = np.zeros_like(t)
-    for f, tau, db in modes:
-        f = f * (1 + rng.normal(0, spread))
-        tau = tau * np.exp(rng.normal(0, 0.12))
-        amp = 10 ** ((db + rng.normal(0, 1.5)) / 20)
-        out += amp * np.exp(-t / tau) * np.sin(2 * np.pi * f * t + rng.uniform(0, 2 * np.pi))
+def _click_train(rng):
+    """1打の中の細かいカチカチの時刻と強さ（秒, dB）"""
+    out = [(0.0, 0.0)]
+    t = 0.0
+    for _ in range(rng.integers(3, 7)):  # 最初の約6msに続く細かい音
+        t += rng.exponential(0.0011) + 0.0002
+        out.append((t, rng.uniform(-9, -1)))
+    for _ in range(rng.integers(1, 4)):  # 8〜14ms：がんぎ車が止まる音
+        out.append((rng.uniform(0.008, 0.014), rng.uniform(-13, -6)))
+    if rng.random() < 0.6:  # 20〜30ms：跳ね返り
+        out.append((rng.uniform(0.020, 0.030), rng.uniform(-20, -13)))
     return out
+
+
+def _bands():
+    return [butter(2, [150, 600], btype="band", fs=SR, output="sos"), butter(2, [600, 2500], btype="band", fs=SR, output="sos"),
+            butter(2, 2500, btype="high", fs=SR, output="sos")]
+
+
+BANDS = _bands()
+RES = {0: [(794, -6), (1587, -8), (1260, -12)], 1: [(700, -6), (1650, -8), (2100, -12)]}
+
+
+def _body(rng, kind, n):
+    """雑音でできた短い響き：低い帯域ほど長く残る（150〜600Hz 18ms、600Hz〜2.5kHz 6ms、2.5kHz〜 2ms）＋弱い金属の響き"""
+    t = np.arange(n) / SR
+    out = np.zeros(n)
+    for sos, tau, db in zip(BANDS, (0.018, 0.006, 0.002), (-4, 0, -2)):
+        tau *= np.exp(rng.normal(0, 0.15))
+        out += 10 ** (db / 20) * sosfilt(sos, rng.normal(0, 1, n)) * np.exp(-t / tau)
+    for f, db in RES[kind]:
+        f *= 1 + rng.normal(0, 0.008)
+        bp = butter(1, [f / 1.03, f * 1.03], btype="band", fs=SR, output="sos")
+        out += 10 ** ((db + rng.normal(0, 1.5)) / 20) * sosfilt(bp, rng.normal(0, 1, n)) * np.exp(-t / 0.014)
+    return out
+
+
+def raw_hit(kind, seed):
+    rng = np.random.default_rng(seed)
+    n = int(0.25 * SR)
+    exc = np.zeros(n)
+    for dt, db in _click_train(rng):
+        w = rng.uniform(0.00008, 0.0002)
+        m = int(6 * w * SR) + 2
+        tt = (np.arange(m) - m / 2) / SR
+        c = rng.normal(0, 1, m) * np.exp(-0.5 * (tt / w) ** 2)
+        s = int(dt * SR)
+        exc[s : s + m] += 10 ** (db / 20) * c[: n - s]
+    body = _body(rng, kind, int(0.12 * SR))
+    h = np.convolve(exc, body)[:n]
+    return h + 0.5 * exc  # 鋭い音そのものも少し残す
+
+
+EQ = {}
+
+
+def _thirds(x):
+    S = np.abs(np.fft.rfft(x * np.hanning(len(x)), 1 << 14)) ** 2
+    F = np.fft.rfftfreq(1 << 14, 1 / SR)
+    return np.array([10 * np.log10(S[(F >= fc / 2 ** (1 / 6)) & (F < fc * 2 ** (1 / 6))].sum() + 1e-20) for fc in CENTERS])
+
+
+def eq_fir(kind):
+    """生の打音40個の平均配分を目標に合わせる最小位相の補正フィルタ（打音の前に響きが出ないように最小位相）"""
+    if kind in EQ:
+        return EQ[kind]
+    from scipy.signal import firwin2, minimum_phase
+    acc = []
+    for i in range(40):
+        h = raw_hit(kind, 990000 + i)
+        acc.append(10 ** (_thirds(h[: int(0.05 * SR)]) / 10))
+    cur = 10 * np.log10(np.mean(acc, 0))
+    cur -= cur.max()
+    corr = np.clip(np.array(TARGET[kind]) - cur, -30, 24)
+    f = np.concatenate([[0], CENTERS, [SR / 2]])
+    g = 10 ** (np.concatenate([[corr[0]], corr, [corr[-1] - 12]]) / 20)
+    lin = firwin2(2047, f / (SR / 2), g)
+    EQ[kind] = minimum_phase(lin, method="homomorphic", n_fft=1 << 15)
+    return EQ[kind]
 
 
 def one_hit(kind, seed, level_db):
-    """1打（約0.4秒）。主な打音＋追い打ち2〜3個"""
-    rng = np.random.default_rng(seed)
-    n = int(0.40 * SR)
-    out = np.zeros(n)
-    t = np.arange(n) / SR
-    subs = [(0.0, 0.0, 1.0)]
-    # 追い打ち：がんぎ車が止まる音（8〜14ms・-8dB前後）と、跳ね返り（20〜32ms・-14dB前後）
-    subs.append((rng.uniform(0.008, 0.014), float(np.clip(rng.normal(-8, 1), -11, -5)), 0.7))
-    subs.append((rng.uniform(0.020, 0.032), rng.normal(-14, 2), 0.5))
-    if rng.random() < 0.5:
-        subs.append((rng.uniform(0.004, 0.006), rng.normal(-12, 2), 0.6))
-    for dt, db, wood_mix in subs:
-        s = int(dt * SR)
-        tt = t[: n - s]
-        x = _modes(tt, METAL[kind], rng, 0.006) + wood_mix * _modes(tt, WOOD, rng, 0.004)
-        # 打った瞬間のごく短いこすれ（1〜2ms）
-        burst = rng.normal(0, 1, len(tt)) * np.exp(-tt / rng.uniform(0.0006, 0.0012)) * 0.35
-        x = x + burst
-        # 立ち上がりを約0.8msなめらかに（パチッという鋭さを抑える）
-        x *= 1 - np.exp(-tt / 0.0008)
-        out[s:] += 10 ** (db / 20) * x
-    out *= 10 ** (level_db / 20)
-    return out
+    h = raw_hit(kind, seed)
+    y = np.convolve(h, eq_fir(kind))[: len(h)]
+    # 細かいカチカチの並び方で強さが大きく変わらないよう、最初の30msの大きさでそろえる
+    # （ばらつきは level_db で ±0.5dB 程度だけつける。最終の音量は書き出し時に決める）
+    y /= np.sqrt(np.mean(y[: int(0.03 * SR)] ** 2)) * 20
+    return y * 10 ** (level_db / 20)
 
 
 def reverb_ir(seed=7, seconds=0.5, t60=0.32):
@@ -100,10 +160,10 @@ TONE = None
 
 
 def tone_filter():
-    """3.5kHzより上をなだらかに（1オクターブ6dB）下げ、60Hz以下を切る"""
+    """60Hz以下を切る（高い音の調整は打音の補正フィルタで済ませる）"""
     global TONE
     if TONE is None:
-        TONE = (butter(1, 3500, fs=SR, output="sos"), butter(2, 60, btype="high", fs=SR, output="sos"))
+        TONE = (None, butter(2, 60, btype="high", fs=SR, output="sos"))
     return TONE
 
 
@@ -117,7 +177,7 @@ def render_block(t0, dur, cfg, ts, kinds, ir):
     for i in sel:
         k = kinds[i]
         rng = np.random.default_rng(cfg["seed"] * 100003 + i)
-        lvl = (0 if k == 0 else -2.5) + rng.normal(0, 0.8)
+        lvl = (0 if k == 0 else -2.0) + rng.normal(0, 0.5)
         lvl = float(np.clip(lvl, -4.5, 1.0))
         h = one_hit(k, cfg["seed"] * 7919 + i, lvl)
         s = int(round((ts[i] - start) * SR))
@@ -126,7 +186,7 @@ def render_block(t0, dur, cfg, ts, kinds, ir):
             buf[a:b] += h[a - s : b - s]
     lp, hp = tone_filter()
     # フィルタを区切りに依存させないため、前に余白をとって計算し、余白を捨てる
-    dry = sosfilt(hp, sosfilt(lp, buf))
+    dry = sosfilt(hp, buf)
     wet = np.stack([fftconvolve(dry, ir[:, c])[: len(dry)] for c in range(2)], axis=1)
     # 時計は部屋の中央より少し左。左右で響きの強さをわずかに変える
     st = np.stack([dry * 1.0, dry * 0.86], axis=1) + 0.30 * wet
