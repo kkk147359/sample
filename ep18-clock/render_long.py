@@ -74,12 +74,13 @@ if __name__ == "__main__":
         ff = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "f32le", "-ar", str(SR), "-ac", "2", "-i", "-",
                                "-af", "loudnorm=I=-24:TP=-3:LRA=7", "-ar", str(SR), "-c:a", "aac", "-b:a", "128k", out], stdin=subprocess.PIPE)
         maxpk = 0
-        for k, x in enumerate(pool.imap(_job, jobs)):
-            x = x * gain
-            maxpk = max(maxpk, np.abs(x).max())
-            ff.stdin.write(x.astype("<f4").tobytes())
-            if k % 10 == 0:
-                print(f"  {k + 1}/{nblk}", flush=True)
+        # 8ブロックずつ計算して書く（まとめて先に計算すると、書き出しが追いつかずメモリがあふれる）
+        for k0 in range(0, nblk, 8):
+            for x in pool.map(_job, jobs[k0 : k0 + 8]):
+                x = x * gain
+                maxpk = max(maxpk, np.abs(x).max())
+                ff.stdin.write(x.astype("<f4").tobytes())
+            print(f"  {min(k0 + 8, nblk)}/{nblk}", flush=True)
         ff.stdin.close()
         ff.wait()
     print(f"wrote {out}  loudnorm前の最大ピーク {20 * np.log10(maxpk):.1f}dBFS")
