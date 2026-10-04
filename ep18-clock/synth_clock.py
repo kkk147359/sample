@@ -17,7 +17,9 @@ SR = 44100
 # 速さ：A＝柱時計（1分に約100打）、B＝ゆっくり（大きな振り子、1分に約60打）
 SPEEDS = {"A": (0.57, 0.63), "B": (0.97, 1.03),
           # v3：もとにした実録音の間隔（チク→タク、タク→チク）
-          "371070": (0.50, 0.70), "405423": (1.003, 0.998), "453159": (0.494, 0.506), "456236": (0.538, 0.620)}
+          "371070": (0.50, 0.70),
+          # 10/4 社長「速さはAがよいが一定にしてほしい」：チクもタクも0.60秒ちょうど、揺れなし
+          "even060": (0.60, 0.60), "405423": (1.003, 0.998), "453159": (0.494, 0.506), "456236": (0.538, 0.620)}
 
 # v2（10/4 社長「時計の音とはかけ離れている」を受けて作り直し）
 # v1 は減衰する正弦波（響きの山）だけで作ったため、音が「ピッ」という音程のある音になっていた。
@@ -48,7 +50,10 @@ def schedule(total, speed, seed):
         ts.append(t)
         kind.append(i % 2)
         base = a if i % 2 == 0 else b
-        t += base * (1 + 0.0015 * np.tanh(slow[i])) + rng.normal(0, 0.0008)
+        if a == b:
+            t += a  # 一定の速さ：揺れをつけない
+        else:
+            t += base * (1 + 0.0015 * np.tanh(slow[i])) + rng.normal(0, 0.0008)
         if t > total + 1:
             break
     return np.array(ts), np.array(kind)
@@ -188,7 +193,7 @@ def one_hit(kind, seed, level_db, tpl="371070"):
     rng = np.random.default_rng(seed)
     env = T["env"][kind]
     nb, nt = env.shape
-    stretch = np.exp(rng.normal(0, 0.03))  # 打音の長さを±3%ほど揺らす
+    stretch = np.exp(rng.normal(0, 0.03))  # 打音の長さを±3%ほど揺らす（山の位置はほぼ動かない）
     n = int(nt * T["hop"] * stretch)
     tt = np.arange(n) / stretch / T["hop"]
     m = _masks(n, T["centers"])
@@ -201,8 +206,10 @@ def one_hit(kind, seed, level_db, tpl="371070"):
         e = np.interp(tt, np.arange(nt), env[k])
         out += gains[k] * carrier * np.sqrt(e)
     out /= np.sqrt(T["env"][0].sum(axis=0).max())  # チクの最大を基準にそろえる
-    pre = int(T["pre"] * SR * stretch)
-    return out[pre:] * 10 ** ((level_db + (T["level_diff"] if kind == 1 else 0)) / 20)
+    # チクとタクで一番大きい点の位置が違う（例 3.7ms と 1.2ms）ので、山の位置で間隔がそろうように前をそろえる
+    pk = [np.argmax(T["env"][q].sum(0)) for q in (0, 1)]
+    pre = int((T["pre"] * SR + (pk[kind] - max(pk)) * T["hop"]) * stretch)
+    return out[max(pre, 0):] * 10 ** ((level_db + (T["level_diff"] if kind == 1 else 0)) / 20)
 
 
 def reverb_ir(seed=7, seconds=0.5, t60=0.32):
