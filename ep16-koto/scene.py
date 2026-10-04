@@ -1,5 +1,5 @@
 """琴＋自然音の試作を書き出す
-使い方: python3 scene.py <出力wav> <suikinkutsu|irori|none> [長さ(秒)] [乱数シード]
+使い方: python3 scene.py <出力wav> <suikinkutsu|irori|none> [長さ(秒)] [乱数シード] [koto|17gen]
 """
 import sys
 
@@ -8,6 +8,7 @@ from scipy.io import wavfile
 from scipy.signal import fftconvolve
 
 import nature
+import synth_17gen as gen17
 import synth_koto as koto
 
 SR = 44100
@@ -23,7 +24,8 @@ if __name__ == "__main__":
     path, scene = sys.argv[1], sys.argv[2]
     total = float(sys.argv[3]) if len(sys.argv) > 3 else 60
     rng = np.random.default_rng(int(sys.argv[4]) if len(sys.argv) > 4 else 7)
-    k = koto.render(total)
+    inst = sys.argv[5] if len(sys.argv) > 5 else "koto"
+    k = gen17.render(total) if inst == "17gen" else koto.render(total)
     out = k.copy()
     if scene != "none":
         mono = nature.suikinkutsu(total, rng) if scene == "suikinkutsu" else nature.irori(total, rng)
