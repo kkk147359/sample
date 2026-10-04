@@ -42,25 +42,30 @@ def koto_note(midi, vel, length, bend=None, yuri=False):
     ratio = 2 ** (cents / 1200)
     phase_base = 2 * np.pi * np.cumsum(f0 * ratio) / SR
 
-    # 倍音：爪で端近く（全長の約1/10）を弾く。やさしく弾くほど高い倍音を減らす
-    beta = 0.1
-    tilt = np.interp(vel, [0.3, 0.7], [1.6, 1.25])
-    t60_1 = np.interp(midi, [55, 81], [7.0, 4.5])
+    # 倍音の配分と減衰は実録音（freesound #223958 Koto C4, CC0）の測定に合わせる：
+    # - 弾いた直後は約3.4kHzまで倍音がほぼ同じ強さで並び、その上は下がる
+    # - 基音は胴からあまり放射されず、3倍音より15〜26dB弱い（低い周波数ほど弱い）
+    # - 減衰は周波数で決まる：800Hz以下 約5〜6秒、1.3kHz 約2秒、1.5kHz以上 0.6〜1秒
+    beta = 1 / 11  # 爪で弾く位置（端から全長の約1/11）
     out = np.zeros(n)
-    B = 0.00008  # 弦のわずかな非調和性
-    for k in range(1, 24):
+    B = 0.00002  # 実測ではほぼ整数倍
+    for k in range(1, 40):
         fk = k * np.sqrt(1 + B * k * k)
-        if fk * f0 > 7000:
+        fhz = fk * f0
+        if fhz > 7000:
             break
-        amp = abs(np.sin(k * np.pi * beta)) / k ** tilt
-        t60 = t60_1 / (1 + 0.45 * (k - 1))
+        amp = 0.35 + abs(np.sin(k * np.pi * beta))  # 弾く位置による凹凸（極端な谷は作らない）
+        amp /= 1 + (fhz / 3700) ** 4  # 約3.5kHzより上は急に下げる
+        amp /= 1 + (600 / fhz) ** 3  # 胴の放射：低い周波数ほど弱い
+        amp *= np.interp(vel, [0.3, 0.7], [0.9, 1.0]) ** (fhz / 1000)  # やさしく弾くと高域が少し減る
+        t60 = np.interp(fhz, [150, 800, 1000, 1300, 2000, 3500, 7000], [6.5, 5.5, 2.6, 1.1, 0.8, 0.55, 0.3])
         env = np.exp(-6.9 * t / t60)
         # 低い倍音にはわずかなうなり（弦の二つの振動方向の差）
         if k <= 4:
             env = env * (1 + 0.12 * np.cos(2 * np.pi * rng.uniform(0.2, 0.6) * t))
         out += amp * env * np.sin(fk * phase_base + rng.uniform(0, 6.28))
-    # 立ち上がり：3ms で立ち上げてクリックを防ぐ
-    a = int(0.003 * SR)
+    # 立ち上がり：実測のピークは約13ms。6msで立ち上げる
+    a = int(0.006 * SR)
     out[:a] *= np.linspace(0, 1, a)
     # 爪の当たる音（ごく弱く、高すぎない帯域）
     click_len = int(0.012 * SR)
@@ -84,8 +89,7 @@ def body(sig):
 def tone(sig):
     """低域を整え、4kHzより上をなだらかに削る。"""
     sig = sosfilt(butter(2, 80, btype="high", fs=SR, output="sos"), sig)
-    sig = sosfilt(butter(1, 3500, fs=SR, output="sos"), sig)
-    sig = sosfilt(butter(2, 7000, fs=SR, output="sos"), sig)
+    sig = sosfilt(butter(2, 6000, fs=SR, output="sos"), sig)
     return sig
 
 
