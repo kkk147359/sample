@@ -24,7 +24,7 @@ YO = [38, 40, 43, 45, 47, 50, 52, 55, 57, 59, 62, 64, 67]  # D2 E2 G2 A2 B2 D3 E
 KEYS = [0, -2, 0, 2]  # D → C → D → E
 
 
-def note(midi, vel, length, bend=None, yuri=False):
+def note(midi, vel, length, bend=None, yuri=False, attack=0.09):
     n = int(length * SR)
     t = np.arange(n) / SR
     f0 = midi_hz(midi)
@@ -52,9 +52,9 @@ def note(midi, vel, length, bend=None, yuri=False):
         if k <= 3:
             env = env * (1 + 0.1 * np.cos(2 * np.pi * rng.uniform(0.15, 0.4) * t))
         out += amp * env * np.sin(k * phase_base + rng.uniform(0, 6.28))
-    # 立ち上がり：指の腹なので爪より少しゆっくり（12ms）。爪の当たる音はない
-    a = int(0.012 * SR)
-    out[:a] *= np.linspace(0, 1, a) ** 1.5
+    # 立ち上がり：急に音が出ないよう、なめらかな曲線で約90msかけて立ち上げる（社長指示）
+    a = int(attack * SR)
+    out[:a] *= 0.5 - 0.5 * np.cos(np.pi * np.linspace(0, 1, a))
     fade = int(1.2 * SR)
     out[-fade:] *= np.linspace(1, 0, fade) ** 2
     return out * vel / (np.max(np.abs(out)) + 1e-9)
@@ -69,7 +69,7 @@ def tone(sig):
 
 
 def compose(total):
-    """(時刻, midi, vel, 長さ, bend, yuri)。低音の楽器なので音数は少なく、余韻を聞かせる。"""
+    """(時刻, midi, vel, 長さ, bend, yuri, 立ち上がり秒)。低音の楽器なので音数は少なく、余韻を聞かせる。"""
     events = []
     t = 1.5
     section_len = total / len(KEYS)
@@ -80,10 +80,11 @@ def compose(total):
         key = KEYS[sec]
         center = 7 if sec == 2 else 6  # 中心はE3〜G3。最低音は支えにだけ使う
         # ときどき最低音域で支える（オクターブを同時に：合せ爪）
+        # 同時に弾くと音が急に大きくなるので、低い音から少しずらして小さく
         if rng.random() < 0.25:
             root = YO[rng.choice([0, 2, 3])] + key
-            events.append((t, root, 0.32, 10.0, None, False))
-            events.append((t + 0.04, root + 12, 0.24, 9.0, None, False))
+            events.append((t, root, 0.2, 10.0, None, False, 0.22))
+            events.append((t + 0.35, root + 12, 0.14, 9.0, None, False, 0.22))
             t += rng.uniform(2.0, 3.0)
         if motif and rng.random() < 0.4:
             steps = list(motif)
@@ -98,15 +99,23 @@ def compose(total):
             pos = int(np.clip(pos + step, 3, 11))
             m = YO[pos] + key
             last = i == len(steps) - 1
-            vel = rng.uniform(0.38, 0.52) if not last else rng.uniform(0.32, 0.42)
+            # 強さのばらつきは小さく。間のあとの最初の音は弱めに入る
+            vel = rng.uniform(0.40, 0.46) if not last else rng.uniform(0.36, 0.41)
+            # 間のあとはそっと入る：最初の音は弱くゆっくり立ち上げ、2音目で少し戻す
+            attack = 0.09
+            if i == 0:
+                vel *= 0.6
+                attack = 0.22
+            elif i == 1:
+                vel *= 0.85
             bend = None
             # 押し手は控えめに（全音上の隣の弦へ、15%）
             if pos + 1 < len(YO) and YO[pos + 1] - YO[pos] == 2 and rng.random() < 0.15:
                 bend = (rng.uniform(0.5, 0.9), 2, rng.uniform(0.3, 0.45))
             ring = 9.0 if last else max(6.0, rhythm[i] + 4)
-            events.append((t + rng.normal(0, 0.025), m, vel, ring, bend, last))
+            events.append((t + rng.normal(0, 0.025), m, vel, ring, bend, last, attack))
             t += 0 if last else rhythm[i]
-        t += rng.uniform(2.5, 4.5)  # 間：低い弦の余韻が長いので琴より長めに取れる
+        t += rng.uniform(1.8, 3.0)  # 間：長すぎると次の音が静けさから急に出てくるので3秒まで
     return events
 
 
@@ -114,16 +123,17 @@ def render(total):
     n = int(total * SR) + 12 * SR
     left = np.zeros(n)
     right = np.zeros(n)
-    for t, m, vel, dur, bend, yuri in compose(total):
-        y = note(m, vel, dur, bend, yuri)
+    for t, m, vel, dur, bend, yuri, attack in compose(total):
+        y = note(m, vel, dur, bend, yuri, attack)
         s = int(max(t, 0) * SR)
         pan = np.interp(m, [36, 68], [0.42, 0.58])
         left[s : s + len(y)] += y * np.sqrt(1 - pan)
         right[s : s + len(y)] += y * np.sqrt(pan)
     left, right = tone(left), tone(right)
-    wet_l = fftconvolve(left, reverb_ir(3, rt=2.6))[:n]
-    wet_r = fftconvolve(right, reverb_ir(4, rt=2.6))[:n]
-    out = np.stack([left + 0.28 * wet_l, right + 0.28 * wet_r], axis=1)[: int(total * SR)]
+    # 残響を少し長く・多めにして、音と音のあいだの静けさから急に立ち上がらないようにする
+    wet_l = fftconvolve(left, reverb_ir(3, rt=3.2))[:n]
+    wet_r = fftconvolve(right, reverb_ir(4, rt=3.2))[:n]
+    out = np.stack([left + 0.4 * wet_l, right + 0.4 * wet_r], axis=1)[: int(total * SR)]
     fi, fo = int(2 * SR), int(8 * SR)
     out[:fi] *= np.linspace(0, 1, fi)[:, None]
     out[-fo:] *= np.linspace(1, 0, fo)[:, None] ** 2

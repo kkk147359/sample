@@ -12,8 +12,8 @@ import synth_17gen as gen17
 import synth_koto as koto
 
 SR = 44100
-# 琴に対する自然音の音量（dB）。品質チェック部の条件：水琴窟は琴より約15dB小さく
-LEVEL_DB = {"suikinkutsu": -15, "irori": -19}
+# 琴に対する自然音の音量（dB）。水琴窟は絶えず鳴る響きなので琴より約16dB小さく
+LEVEL_DB = {"suikinkutsu": -16, "irori": -19}
 
 
 def rms(x):
