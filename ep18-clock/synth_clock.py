@@ -15,7 +15,9 @@ from scipy.signal import butter, sosfilt, fftconvolve
 SR = 44100
 
 # 速さ：A＝柱時計（1分に約100打）、B＝ゆっくり（大きな振り子、1分に約60打）
-SPEEDS = {"A": (0.57, 0.63), "B": (0.97, 1.03)}
+SPEEDS = {"A": (0.57, 0.63), "B": (0.97, 1.03),
+          # v3：もとにした実録音の間隔（チク→タク、タク→チク）
+          "371070": (0.50, 0.70), "405423": (1.003, 0.998), "453159": (0.494, 0.506), "456236": (0.538, 0.620)}
 
 # v2（10/4 社長「時計の音とはかけ離れている」を受けて作り直し）
 # v1 は減衰する正弦波（響きの山）だけで作ったため、音が「ピッ」という音程のある音になっていた。
@@ -133,13 +135,74 @@ def eq_fir(kind):
     return EQ[kind]
 
 
-def one_hit(kind, seed, level_db):
-    h = raw_hit(kind, seed)
-    y = np.convolve(h, eq_fir(kind))[: len(h)]
-    # 細かいカチカチの並び方で強さが大きく変わらないよう、最初の30msの大きさでそろえる
-    # （ばらつきは level_db で ±0.5dB 程度だけつける。最終の音量は書き出し時に決める）
-    y /= np.sqrt(np.mean(y[: int(0.03 * SR)] ** 2)) * 20
-    return y * 10 ** (level_db / 20)
+# v3（10/4 社長「もう少し現実に近づけて」）
+# 実録音の打音から「帯域ごとの音量の時間変化」（tools/tick_template.py、数十打の平均）を取り出し、
+# 1打ごとに新しい雑音をその形に沿わせて鳴らす。波形は毎回ちがい、音量の形と音色の配分だけが実録音どおりになる。
+# 録音に入っていた部屋の雑音（打音の後ろの一定の音）は帯域ごとに差し引く。
+import os
+
+TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
+TPL = {}
+HF_CUT = None
+
+
+def template(name):
+    if name in TPL:
+        return TPL[name]
+    d = np.load(os.path.join(TEMPLATE_DIR, f"t{name}.npz"))
+    cen = d["centers"]
+    hop = int(d["hop"])
+    envs = []
+    for par in (0, 1):
+        env = d[f"env{par}"].copy()
+        floor = np.median(env[:, -60:-10], axis=1, keepdims=True)  # 最後の約18msを部屋の雑音とみなす
+        env = np.clip(env - 1.2 * floor, 0, None)
+        # 企画の条件：3.5kHzより上をゆるく下げる（3dB/オクターブ）
+        g = np.where(cen > 3500, (cen / 3500) ** (-1.0), 1.0) ** 2
+        env *= g[:, None]
+        envs.append(env)
+    lv = 10 * np.log10(envs[1].sum() / envs[0].sum())
+    TPL[name] = {"centers": cen, "hop": hop, "pre": float(d["pre"]), "env": envs, "ioi": d["ioi"], "level_diff": lv}
+    return TPL[name]
+
+
+MASKS = {}
+
+
+def _masks(n, cen):
+    key = (n, len(cen))
+    if key not in MASKS:
+        f = np.fft.rfftfreq(n, 1 / SR)
+        m = []
+        for fc in cen:
+            lo, hi = fc / 2 ** (1 / 6), fc * 2 ** (1 / 6)
+            # 隣の帯域となめらかにつながる台形
+            w = np.clip(np.minimum((f - lo / 1.12) / (lo * 0.12), (hi * 1.12 - f) / (hi * 0.12)), 0, 1)
+            m.append(w)
+        MASKS[key] = np.array(m)
+    return MASKS[key]
+
+
+def one_hit(kind, seed, level_db, tpl="371070"):
+    T = template(tpl)
+    rng = np.random.default_rng(seed)
+    env = T["env"][kind]
+    nb, nt = env.shape
+    stretch = np.exp(rng.normal(0, 0.03))  # 打音の長さを±3%ほど揺らす
+    n = int(nt * T["hop"] * stretch)
+    tt = np.arange(n) / stretch / T["hop"]
+    m = _masks(n, T["centers"])
+    W = np.fft.rfft(rng.normal(0, 1, n))
+    out = np.zeros(n)
+    gains = 10 ** (rng.normal(0, 1.0, nb) / 20)  # 帯域ごとの強さを±1dBほど変える（同じ音のコピーにしない）
+    for k in range(nb):
+        carrier = np.fft.irfft(W * m[k], n)
+        carrier /= np.sqrt(np.mean(carrier ** 2)) + 1e-12
+        e = np.interp(tt, np.arange(nt), env[k])
+        out += gains[k] * carrier * np.sqrt(e)
+    out /= np.sqrt(T["env"][0].sum(axis=0).max())  # チクの最大を基準にそろえる
+    pre = int(T["pre"] * SR * stretch)
+    return out[pre:] * 10 ** ((level_db + (T["level_diff"] if kind == 1 else 0)) / 20)
 
 
 def reverb_ir(seed=7, seconds=0.5, t60=0.32):
@@ -177,9 +240,9 @@ def render_block(t0, dur, cfg, ts, kinds, ir):
     for i in sel:
         k = kinds[i]
         rng = np.random.default_rng(cfg["seed"] * 100003 + i)
-        lvl = (0 if k == 0 else -2.0) + rng.normal(0, 0.5)
+        lvl = rng.normal(0, 0.5)
         lvl = float(np.clip(lvl, -4.5, 1.0))
-        h = one_hit(k, cfg["seed"] * 7919 + i, lvl)
+        h = one_hit(k, cfg["seed"] * 7919 + i, lvl, cfg.get("tpl", "371070"))
         s = int(round((ts[i] - start) * SR))
         a, b = max(s, 0), min(s + len(h), len(buf))
         if b > a:
@@ -189,6 +252,6 @@ def render_block(t0, dur, cfg, ts, kinds, ir):
     dry = sosfilt(hp, buf)
     wet = np.stack([fftconvolve(dry, ir[:, c])[: len(dry)] for c in range(2)], axis=1)
     # 時計は部屋の中央より少し左。左右で響きの強さをわずかに変える
-    st = np.stack([dry * 1.0, dry * 0.86], axis=1) + 0.30 * wet
+    st = np.stack([dry * 1.0, dry * 0.86], axis=1) + cfg.get("wet", 0.30) * wet
     a = int(pad * SR)
     return st[a : a + n]
