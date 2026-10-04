@@ -151,9 +151,10 @@ TPL = {}
 HF_CUT = None
 
 
-def template(name):
-    if name in TPL:
-        return TPL[name]
+def template(name, soft=False):
+    key = (name, soft)
+    if key in TPL:
+        return TPL[key]
     d = np.load(os.path.join(TEMPLATE_DIR, f"t{name}.npz"))
     cen = d["centers"]
     hop = int(d["hop"])
@@ -164,11 +165,13 @@ def template(name):
         env = np.clip(env - 1.2 * floor, 0, None)
         # 企画の条件：3.5kHzより上をゆるく下げる（3dB/オクターブ）
         g = np.where(cen > 3500, (cen / 3500) ** (-1.0), 1.0) ** 2
+        if soft:  # 10/4 社長「もう少し柔らかく」：2kHzより上をさらに 6dB/オクターブ下げる
+            g *= np.where(cen > 2000, (cen / 2000) ** (-2.0), 1.0)
         env *= g[:, None]
         envs.append(env)
     lv = 10 * np.log10(envs[1].sum() / envs[0].sum())
-    TPL[name] = {"centers": cen, "hop": hop, "pre": float(d["pre"]), "env": envs, "ioi": d["ioi"], "level_diff": lv}
-    return TPL[name]
+    TPL[key] = {"centers": cen, "hop": hop, "pre": float(d["pre"]), "env": envs, "ioi": d["ioi"], "level_diff": lv}
+    return TPL[key]
 
 
 MASKS = {}
@@ -188,8 +191,8 @@ def _masks(n, cen):
     return MASKS[key]
 
 
-def one_hit(kind, seed, level_db, tpl="371070"):
-    T = template(tpl)
+def one_hit(kind, seed, level_db, tpl="371070", soft=False):
+    T = template(tpl, soft)
     rng = np.random.default_rng(seed)
     env = T["env"][kind]
     nb, nt = env.shape
@@ -209,7 +212,15 @@ def one_hit(kind, seed, level_db, tpl="371070"):
     # チクとタクで一番大きい点の位置が違う（例 3.7ms と 1.2ms）ので、山の位置で間隔がそろうように前をそろえる
     pk = [np.argmax(T["env"][q].sum(0)) for q in (0, 1)]
     pre = int((T["pre"] * SR + (pk[kind] - max(pk)) * T["hop"]) * stretch)
-    return out[max(pre, 0):] * 10 ** ((level_db + (T["level_diff"] if kind == 1 else 0)) / 20)
+    out = out[max(pre, 0):]
+    if soft:  # 打った瞬間の鋭さを抑える：山の手前から2.5msかけてなめらかに立ち上げる
+        a = max(int(max(pk) * T["hop"] * stretch) - max(pre, 0) - int(0.0015 * SR), 0)
+        r = int(0.0025 * SR)
+        ramp = np.ones(len(out))
+        ramp[:a] = 0
+        ramp[a : a + r] = 0.5 - 0.5 * np.cos(np.pi * np.arange(min(r, len(out) - a)) / r)
+        out = out * ramp
+    return out * 10 ** ((level_db + (T["level_diff"] if kind == 1 else 0)) / 20)
 
 
 def reverb_ir(seed=7, seconds=0.5, t60=0.32):
@@ -249,7 +260,7 @@ def render_block(t0, dur, cfg, ts, kinds, ir):
         rng = np.random.default_rng(cfg["seed"] * 100003 + i)
         lvl = rng.normal(0, 0.5)
         lvl = float(np.clip(lvl, -4.5, 1.0))
-        h = one_hit(k, cfg["seed"] * 7919 + i, lvl, cfg.get("tpl", "371070"))
+        h = one_hit(k, cfg["seed"] * 7919 + i, lvl, cfg.get("tpl", "371070"), cfg.get("soft", False))
         s = int(round((ts[i] - start) * SR))
         a, b = max(s, 0), min(s + len(h), len(buf))
         if b > a:
