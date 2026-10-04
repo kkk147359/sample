@@ -25,13 +25,21 @@ TYPES = {
     "bell": {"f": (4500, 5000), "rate": (40, 60), "len": (0.4, 0.8), "gap": (1.0, 2.2), "duty": 0.75},
     # 遠くの高い声の合唱（実録音では 10〜13kHz だが、耳につかないよう 6〜7kHz に下げる）
     "high": {"f": (6000, 7000), "rate": (8, 12), "len": (2.0, 6.0), "gap": (4.0, 10.0), "duty": 0.5},
+    # v2（10/5 社長「種類が多い。2つ程度に。高すぎ・低すぎ・速いものはやめて」）で使う2種類。
+    # 高さはどちらも 3.2〜4.0kHz の中くらい（v1 の 2.3kHz の低い声と 4.5kHz 以上の高い声はやめた）。
+    # 脈は実録音の遅い側（1秒に10〜14回）、鳴く間隔もゆっくり。
+    # 「リッ……リッ……」と短く、ゆっくりくり返す
+    "calm_short": {"f": (3600, 4000), "rate": (11, 14), "len": (0.2, 0.35), "gap": (1.3, 2.2), "duty": 0.55},
+    # 「リーー……」とやわらかく伸ばし、長めに休む
+    "calm_long": {"f": (3200, 3500), "rate": (10, 12), "len": (0.8, 1.4), "gap": (2.5, 4.5), "duty": 0.7},
 }
 # 何匹いるか（近い・遠い）。遠いほど小さく、高い音が減り、響きが多い
-POP = [("short", 5), ("trill", 3), ("bell", 6), ("high", 6)]
+# v1: [("short", 5), ("trill", 3), ("bell", 6), ("high", 6)]
+POP = [("calm_short", 3), ("calm_long", 3)]
 
 
 # 型ごとの音量の補正（「リーン」と澄んだ声を主役に、低めの長い声は控えめに）
-LEVEL_ADJ = {"short": 0.0, "trill": -5.0, "bell": 1.0, "high": -3.0}
+LEVEL_ADJ = {"short": 0.0, "trill": -5.0, "bell": 1.0, "high": -3.0, "calm_short": 0.0, "calm_long": 0.0}
 
 
 def make_voices(seed):
@@ -40,7 +48,7 @@ def make_voices(seed):
     for kind, n in POP:
         tp = TYPES[kind]
         for i in range(n):
-            dist = r.uniform(0.3, 1.0)  # 1 が遠い
+            dist = r.uniform(0.45, 1.0)  # 1 が遠い（近すぎる虫は置かない）
             v.append({"kind": kind, "f": r.uniform(*tp["f"]), "rate": r.uniform(*tp["rate"]),
                       "level": -6 - 14 * dist + r.normal(0, 1.5) + LEVEL_ADJ[kind], "dist": dist, "pan": r.uniform(-0.8, 0.8),
                       "seed": int(r.integers(1 << 30))})
