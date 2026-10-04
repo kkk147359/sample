@@ -56,7 +56,7 @@ def koto_note(midi, vel, length, bend=None, yuri=False):
             break
         amp = 0.35 + abs(np.sin(k * np.pi * beta))  # 弾く位置による凹凸（極端な谷は作らない）
         amp /= 1 + (fhz / 3700) ** 4  # 約3.5kHzより上は急に下げる
-        amp /= 1 + (600 / fhz) ** 3  # 胴の放射：低い周波数ほど弱い
+        amp /= 1 + (350 / fhz) ** 4  # 胴の放射：約400Hzより下が弱い（C4の基音は3倍音より約15dB下）
         amp *= np.interp(vel, [0.3, 0.7], [0.9, 1.0]) ** (fhz / 1000)  # やさしく弾くと高域が少し減る
         t60 = np.interp(fhz, [150, 800, 1000, 1300, 2000, 3500, 7000], [6.5, 5.5, 2.6, 1.1, 0.8, 0.55, 0.3])
         env = np.exp(-6.9 * t / t60)
@@ -118,8 +118,8 @@ def compose(total):
     while t < total - 6:
         sec = min(int(t // section_len), len(KEYS) - 1)
         key = KEYS[sec]
-        # セクションCでは少し高めの音域を中心に
-        center = 7 if sec == 2 else 5
+        # 実際の演奏の音域の中心はA4付近（E4〜G5）。セクションCは少し高め
+        center = 8 if sec == 2 else 6
         # ときどき低い一の弦（D3〜D4）で支える
         if rng.random() < 0.3:
             events.append((t, 50 + key, rng.uniform(0.25, 0.32), 6.0, None, False))
@@ -139,10 +139,11 @@ def compose(total):
             steps[rng.integers(0, len(steps))] = int(rng.choice([-1, 1, 2]))
             pos = phrase_start
         else:
-            steps = list(rng.choice([-2, -1, 1, 2, 3, -3], size=rng.integers(3, 8), p=[0.15, 0.27, 0.25, 0.15, 0.09, 0.09]))
+            # 実際の演奏では同じ音を続けて弾くことが多い（隣どうしの約4割）。合成では2割強にする
+            steps = list(rng.choice([0, -2, -1, 1, 2, 3, -3], size=rng.integers(3, 8), p=[0.22, 0.12, 0.21, 0.2, 0.11, 0.07, 0.07]))
             pos = int(np.clip(pos + (center - pos) // 2, 1, top))
         motif, phrase_start = steps, pos
-        rhythm = rng.choice([0.75, 1.0, 1.0, 1.5, 2.0], size=len(steps))
+        rhythm = rng.choice([0.5, 0.75, 1.0, 1.0, 1.5], size=len(steps))
         for i, step in enumerate(steps):
             pos = int(np.clip(pos + step, 1, top))
             m = HIRA[pos] + key
@@ -155,13 +156,17 @@ def compose(total):
             if nxt <= 2 and rng.random() < 0.35:
                 bend = (rng.uniform(0.35, 0.7), nxt, rng.uniform(0.18, 0.3))
             ring = 6.0 if last else max(3.5, dur_gap + 2.5)
+            # 装飾音：実際の演奏に多い0.2秒前後の短い前打ち（隣の弦から）
+            if step != 0 and rng.random() < 0.15:
+                g = int(np.clip(pos - np.sign(step), 0, len(HIRA) - 1))
+                events.append((t - rng.uniform(0.15, 0.22), HIRA[g] + key, vel * 0.6, 2.0, None, False))
             events.append((t + rng.normal(0, 0.02), m, vel, ring, bend, last))
             # 合せ爪：フレーズの終わりにときどきオクターブ下を重ねる
             if last and rng.random() < 0.35 and pos >= 4:
                 events.append((t + 0.03, m - 12, vel * 0.7, ring, None, False))
             t += dur_gap
-        # 間：最後の音の余韻が残っているうちに次へ（1.8〜3.2秒）
-        t += rng.uniform(1.8, 3.2)
+        # 間：最後の音の余韻が残っているうちに次へ（1.5〜3.2秒）
+        t += rng.uniform(1.5, 3.2)
     return events
 
 
