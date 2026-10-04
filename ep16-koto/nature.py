@@ -18,43 +18,76 @@ POT_MODES = np.array([316, 380, 499, 875, 1012, 1163, 1382, 1507, 1657, 2487, 27
 POT_LEVELS_DB = np.array([-8, -7, -8, -9, -8, -7, -5, -6, 0, -8, -9, -8])
 
 
-def suikinkutsu(total, rng):
-    """水琴窟。実録音の測定：しずくは1分に約47滴（間隔の中央値0.72秒、9割が3秒以内）、
+def suik_events(total, rng):
+    """水琴窟のしずくの時刻と強さ。実録音の測定：しずくは1分に約47滴（間隔の中央値0.72秒、9割が3秒以内）、
     1滴は周りの響きより約12dB大きいだけで、余韻は2〜3秒。小さなしずくが絶えず重なる響きになる。
-    合成では、はっきり聞こえるしずく（4割）は1分に約50滴、残りはごく小さなしずくで間を埋める。
-    立ち上がりは実測（約10ms）よりゆるやかにする（急な音で目が覚めないように）。"""
-    n = int(total * SR)
-    out = np.zeros(n)
+    実録音では屋外の環境音がしずくの帯域を埋めているが、環境ノイズは風の音になるので使わず、
+    代わりにごく小さなしずく（約-12dB）を間に多く入れて埋める。はっきり聞こえるしずくは4割。"""
+    ev = []
     t = rng.uniform(0.2, 0.8)
     while t < total - 0.5:
-        # 実録音では屋外の環境音がしずくの帯域を埋めていて、しずくは周りより約12dB大きいだけ。
-        # 環境ノイズは風の音になるので使わず、代わりにごく小さなしずく（約-12dB）を間に多く入れて埋める
-        drop = _drop(rng) * (1.0 if rng.random() < 0.4 else 10 ** (rng.uniform(-15, -9) / 20))
-        s = int(t * SR)
-        e = min(n, s + len(drop))
-        out[s:e] += drop[: e - s]
+        g = 1.0 if rng.random() < 0.4 else 10 ** (rng.uniform(-15, -9) / 20)
+        ev.append((t, g, int(rng.integers(0, BANK_SIZE))))
         t += float(np.clip(rng.lognormal(np.log(0.38), 0.7), 0.08, 2.5))
-    return out + _pot_bed(total, rng, out)
+    return ev
+
+
+BANK_SIZE = 400
+_bank = None
+
+
+def drop_bank():
+    """しずくの音を400通り作り置きする（長い版を速く作るため。強さは毎回ばらつかせる）"""
+    global _bank
+    if _bank is None:
+        r = np.random.default_rng(259993)
+        _bank = [_drop(r) for _ in range(BANK_SIZE)]
+    return _bank
+
+
+def suik_block(events, a, b, bed_gain):
+    """[a, b) 秒の水琴窟（しずく＋下地の響き）"""
+    bank = drop_bank()
+    start = max(0.0, a - 5.0)
+    n = int((b - start) * SR) + 1
+    out = np.zeros(n)
+    for t, g, k in events:
+        if t < start or t >= b:
+            continue
+        d = bank[k]
+        s = int((t - start) * SR)
+        e = min(n, s + len(d))
+        out[s:e] += g * d[: e - s]
+    i0 = int((a - start) * SR)
+    out = out[i0 : i0 + int((b - a) * SR)]
+    return out + bed_gain * pot_bed(a, len(out))
+
+
+def suikinkutsu(total, rng):
+    ev = suik_events(total, rng)
+    drops = suik_block(ev, 0, total, 0.0)
+    band = sosfilt(butter(4, [900, 3500], btype="band", fs=SR, output="sos"), drops)
+    bed = pot_bed(0, len(drops))
+    return drops + bed * np.sqrt(np.mean(band ** 2)) / np.sqrt(np.mean(bed ** 2)) * 10 ** (-10 / 20)
 
 
 # 甕がずっと鳴っている下地の響き（実測：約560・620・750・870Hz、1秒に1回ほどゆっくり揺れる、
-# しずくの帯域より約10dB小さい）。ノイズは使わず、ゆれる持続音だけで作る（風の音にしない）
+# しずくの帯域より約10dB小さい）。ノイズは使わず、ゆれる持続音だけで作る（風の音にしない）。
+# 区切って計算してもつながるよう、時刻だけで決まる式にする
 BED_FREQS = np.array([561, 623, 748, 874]) * 0.945
+_br = np.random.default_rng(748)
+BED_LFO = [(_br.uniform(0.4, 1.5, 5), _br.uniform(0, 6.28, 5)) for _ in BED_FREQS]
+BED_PHASE = _br.uniform(0, 6.28, len(BED_FREQS))
 
 
-def _pot_bed(total, rng, drops):
-    n = int(total * SR)
-    tt = np.arange(n) / SR
+def pot_bed(a, n):
+    tt = a + np.arange(n) / SR
     bed = np.zeros(n)
-    for f in BED_FREQS:
-        # 1秒前後でゆっくり揺れる音量（標準偏差 約4dB）
-        k = int(total * 2) + 4
-        ctrl = np.convolve(rng.normal(0, 1, k), np.hanning(5), "same")
-        ctrl = np.interp(tt, np.linspace(0, total, k), ctrl)
-        amp = 10 ** (4 * ctrl / np.std(ctrl) / 20)
-        bed += amp * np.sin(2 * np.pi * f * (1 + 0.003 * np.sin(2 * np.pi * rng.uniform(0.05, 0.15) * tt)) * tt + rng.uniform(0, 6.28))
-    drop_band = sosfilt(butter(4, [900, 3500], btype="band", fs=SR, output="sos"), drops)
-    return bed * (np.sqrt(np.mean(drop_band ** 2)) / np.sqrt(np.mean(bed ** 2))) * 10 ** (-10 / 20)
+    for f, (rates, phases), ph in zip(BED_FREQS, BED_LFO, BED_PHASE):
+        c = sum(np.sin(2 * np.pi * r * tt + p) for r, p in zip(rates, phases)) / np.sqrt(2.5)
+        amp = 10 ** (4 * c / 20)  # 標準偏差 約4dB で揺れる
+        bed += amp * np.sin(2 * np.pi * f * tt + ph)
+    return bed
 
 
 def _drop(rng):

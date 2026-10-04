@@ -72,11 +72,12 @@ def compose(total):
     """(時刻, midi, vel, 長さ, bend, yuri, 立ち上がり秒)。低音の楽器なので音数は少なく、余韻を聞かせる。"""
     events = []
     t = 1.5
-    section_len = total / len(KEYS)
+    # 調は約4分ごとに D → C → D → E と巡る（長い版でも同じ調が続きすぎないように）
+    section_len = min(total / len(KEYS), 240)
     pos = 6
     motif, phrase_start = None, pos
     while t < total - 8:
-        sec = min(int(t // section_len), len(KEYS) - 1)
+        sec = int(t // section_len) % len(KEYS)
         key = KEYS[sec]
         center = 7 if sec == 2 else 6  # 中心はE3〜G3。最低音は支えにだけ使う
         # ときどき最低音域で支える（オクターブを同時に：合せ爪）
@@ -117,6 +118,33 @@ def compose(total):
             t += 0 if last else rhythm[i]
         t += rng.uniform(1.8, 3.0)  # 間：長すぎると次の音が静けさから急に出てくるので3秒まで
     return events
+
+
+def render_block(events, a, b, pad=20.0):
+    """[a, b) 秒の区間だけを書き出す（長い版を区切って計算するため）。
+    a-pad 秒以降に始まる音を含めて計算し、余韻と残響がつながるようにする。"""
+    start = max(0.0, a - pad)
+    n = int((b - start) * SR) + 1
+    left = np.zeros(n)
+    right = np.zeros(n)
+    for t, m, vel, dur, bend, yuri, attack in events:
+        if t < start or t >= b:
+            continue
+        # 区切りをまたぐ音は前後の区間で2回計算するので、音ごとに乱数を固定して同じ波形にする
+        global rng
+        rng = np.random.default_rng(int(round(t * 1000)) * 131 + m)
+        y = note(m, vel, dur, bend, yuri, attack)
+        s = int((t - start) * SR)
+        e = min(n, s + len(y))
+        pan = np.interp(m, [36, 68], [0.42, 0.58])
+        left[s:e] += y[: e - s] * np.sqrt(1 - pan)
+        right[s:e] += y[: e - s] * np.sqrt(pan)
+    left, right = tone(left), tone(right)
+    wet_l = fftconvolve(left, reverb_ir(3, rt=3.2))[:n]
+    wet_r = fftconvolve(right, reverb_ir(4, rt=3.2))[:n]
+    out = np.stack([left + 0.4 * wet_l, right + 0.4 * wet_r], axis=1)
+    i0 = int((a - start) * SR)
+    return out[i0 : i0 + int((b - a) * SR)]
 
 
 def render(total):
