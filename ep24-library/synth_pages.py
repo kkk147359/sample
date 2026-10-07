@@ -26,7 +26,7 @@ def _bp(lo, hi, order=2):
     return butter(order, [lo, hi], btype="band", fs=SR, output="sos")
 
 
-def crackle(n, rate_env, rng, bright=1.0, sigma=0.8, paper=True):
+def crackle(n, rate_env, rng, bright=1.0, sigma=0.55, paper=True):
     """細かいパチパチの列。rate_env は1秒あたりの数（長さ n の配列）。"""
     p = np.clip(rate_env / SR, 0, 0.5)
     hit = rng.random(n) < p
@@ -64,7 +64,7 @@ def flap(n, rng):
 
 def page_turn(rng):
     """1回のめくり（前の指の音も含む）。(音, めくりの山の位置[秒]) を返す。"""
-    pre = rng.uniform(1.0, 1.8)  # 指がページの端をすべる
+    pre = rng.uniform(1.5, 2.3)  # 指がページの端をすべる
     lift = rng.uniform(0.22, 0.32)
     move = rng.uniform(0.15, 0.30)
     land = 0.35
@@ -75,14 +75,15 @@ def page_turn(rng):
     lvl = np.zeros(n)
     # 指：だんだん近づく小さなこすれ
     m = t < pre
-    rate[m] = rng.uniform(250, 500)
-    lvl[m] = 0.20 * np.clip(t[m] / pre, 0, 1) ** 1.2
+    # 指が端に近づくにつれ、こすれる粒も増える（持ち上げとの差を小さくして急な音を避ける）
+    rate[m] = rng.uniform(250, 500) + 2000 * np.clip(t[m] / pre, 0, 1) ** 2
+    lvl[m] = 0.40 * np.clip(t[m] / pre, 0, 1) ** 1.2
     # 持ち上げ：紙がしなって細かい音が増える（立ち上がり140〜240ms、急な音を避ける）
     a0 = pre
     m = (t >= a0) & (t < a0 + lift)
-    rise = rng.uniform(0.14, 0.24)
-    rate[m] = 5000
-    lvl[m] = 0.20 + 0.80 * np.clip((t[m] - a0) / rise, 0, 1) ** 1.3
+    rise = rng.uniform(0.22, 0.32)
+    rate[m] = 2500 + 2500 * np.clip((t[m] - a0) / rise, 0, 1)
+    lvl[m] = 0.40 + 0.60 * np.clip((t[m] - a0) / rise, 0, 1) ** 1.3
     # 動く：まばらになり、少し小さく
     a1 = a0 + lift
     m = (t >= a1) & (t < a1 + move)
@@ -114,8 +115,8 @@ def thump(rng):
     """本を少し持ち直すやわらかい音（低め、急にならないように）"""
     n = int(0.5 * SR)
     y = crackle(n, np.full(n, 4000.0), rng, bright=2.5)
-    y = sosfilt(_bp(150, 700), y) * env(n, 0.05, 3.0)
-    return y * 0.6
+    y = sosfilt(_bp(150, 700), y) * env(n, 0.25, 3.0)
+    return y * 0.2
 
 
 def bed(n, rng):
@@ -206,3 +207,137 @@ def render(total, seed=24, lo=15.0, hi=40.0, first=4.0):
     wet = np.stack([fftconvolve(dry[:, c], ir[:, c])[:n] for c in range(2)], 1)
     out = eq_to_target(dry + wet)
     return out
+
+
+# ---- 長い版：区間ごとに同じ波形を作れる版（10/7 試聴版A＝render(90, 7) の音色・背景の大きさに合わせる） ----
+
+def calibrate(seed=7, dur=90.0):
+    """試聴版Aと同じ手順を1度だけ通し、補正カーブ（T_CENT ごとのdB）と背景の目標RMSを返す"""
+    rng = np.random.default_rng(seed)
+    n = int(dur * SR)
+    dry = np.zeros((n, 2))
+    for t0 in schedule(dur - 3, rng, 4.0, 15.0, 40.0):
+        y, _ = page_turn(rng)
+        pan = rng.uniform(-0.15, 0.15)
+        i = int(t0 * SR)
+        j = min(n, i + len(y))
+        dry[i:j, 0] += y[: j - i] * (1 - pan)
+        dry[i:j, 1] += y[: j - i] * (1 + pan)
+        if rng.random() < 0.5:
+            r = rub(rng.uniform(0.8, 1.6), 0.12, rng)
+            k = i + len(y) + int(rng.uniform(0.3, 1.5) * SR)
+            j = min(n, k + len(r))
+            if k < n:
+                dry[k:j] += r[: j - k, None]
+        if rng.random() < 0.25:
+            r = rub(rng.uniform(0.5, 1.0), 0.06, rng)
+            k = i + int(rng.uniform(6, 12) * SR)
+            j = min(n, k + len(r))
+            if k < n:
+                dry[k:j] += r[: j - k, None]
+        if rng.random() < 0.12:
+            r = thump(rng)
+            k = i + int(rng.uniform(8, 14) * SR)
+            j = min(n, k + len(r))
+            if k < n:
+                dry[k:j] += r[: j - k, None]
+    sec = (dry[: n // SR * SR, 0].reshape(-1, SR) ** 2).mean(1)
+    bed_rms = np.sqrt(np.percentile(sec[sec > 0], 90)) * 10 ** (BED_DB / 20)
+    b = bed(n, rng)
+    b *= bed_rms / np.sqrt((b ** 2).mean())
+    dry[:, 0] += b
+    dry[:, 1] += np.roll(b, 37)
+    ir = room_ir(rng)
+    x = dry + np.stack([fftconvolve(dry[:, c], ir[:, c])[:n] for c in range(2)], 1)
+    f = np.fft.rfftfreq(n, 1 / SR)
+    P = (np.abs(np.fft.rfft(x, axis=0)) ** 2).sum(axis=1)
+    have = np.array([P[(f >= c / 2 ** (1 / 6)) & (f < c * 2 ** (1 / 6))].sum() for c in T_CENT])
+    have = 10 * np.log10(have / have.max() + 1e-12)
+    return {"corr": np.clip(T_DB - have, -18, 12), "bed_rms": bed_rms, "ir": ir}
+
+
+def eq_fir(corr, taps=4097):
+    """補正カーブを直線位相のFIRにする（区間の境目で同じ波形になるように）"""
+    nf = 1 << 16
+    f = np.fft.rfftfreq(nf, 1 / SR)
+    g_db = np.interp(np.log2(np.maximum(f, 1)), np.log2(T_CENT), corr, left=corr[0], right=corr[-1])
+    g_db[f > 12000] -= 12
+    h = np.fft.irfft(10 ** (g_db / 20), n=nf)
+    h = np.roll(h, taps // 2)[:taps] * np.hanning(taps)
+    return h
+
+
+def plan(total, seed, lo=15.0, hi=40.0, first=4.0):
+    """めくる時刻の一覧（全体で一度だけ決める）"""
+    return schedule(total - 3, np.random.default_rng(seed), first, lo, hi)
+
+
+def _events(i, t0, seed):
+    """i番目のめくりと、その後の手の音。(開始秒, 左, 右) のリスト。乱数はめくりごとに固定"""
+    rng = np.random.default_rng([seed, i])
+    y, _ = page_turn(rng)
+    pan = rng.uniform(-0.15, 0.15)
+    out = [(t0, y * (1 - pan), y * (1 + pan))]
+    end = t0 + len(y) / SR
+    if rng.random() < 0.5:
+        r = rub(rng.uniform(0.8, 1.6), 0.12, rng)
+        out.append((end + rng.uniform(0.3, 1.5), r, r))
+    if rng.random() < 0.25:
+        r = rub(rng.uniform(0.5, 1.0), 0.06, rng)
+        out.append((t0 + rng.uniform(6, 12), r, r))
+    if rng.random() < 0.12:
+        r = thump(rng)
+        out.append((t0 + rng.uniform(8, 14), r, r))
+    return out
+
+
+def bed_span(s0, s1, seed):
+    """背景を絶対時刻 s0〜s1 秒（整数秒）で作る。粒は1秒ごとに乱数を固定し、どの区間から作っても同じ波形"""
+    n = (s1 - s0) * SR
+    rate = np.empty(n)
+    amp = np.zeros(n)
+    for s in range(s0, s1):
+        r = np.random.default_rng([seed, 999999, s])
+        t = s + np.arange(SR) / SR
+        slow = 0.5 + 0.5 * np.sin(2 * np.pi * t / 23.0 + seed)
+        rt = 400 + 300 * slow
+        hit = r.random(SR) < rt / SR
+        a = np.exp(r.normal(0, 0.3, SR)) * hit * np.where(r.random(SR) < 0.5, 1, -1)
+        amp[(s - s0) * SR:(s - s0 + 1) * SR] = a * (0.75 + 0.25 * slow)
+    k = np.exp(-np.arange(int(0.0004 * SR)) / (0.00008 * SR * 2.0))
+    y = fftconvolve(amp, k)[:n]
+    return sosfilt(_bp(180, 1400), y)
+
+
+def render_block(t0, dur, seed, times, cal, fir, bed_unit):
+    """t0〜t0+dur 秒を書き出す。前に3秒の助走をつけ、フィルタと響きを落ち着かせてから切り取る"""
+    pre = 3
+    s0 = max(0, int(np.floor(t0)) - pre)
+    s1 = int(np.ceil(t0 + dur)) + 1
+    n = (s1 - s0) * SR
+    dry = np.zeros((n, 2))
+    for i, te in enumerate(times):
+        if te < s0 - 20 or te > s1:
+            continue
+        for ts, l, r in _events(i, te, seed):
+            k = int(round((ts - s0) * SR))
+            a, b = max(k, 0), min(n, k + len(l))
+            if b > a:
+                dry[a:b, 0] += l[a - k:b - k]
+                dry[a:b, 1] += r[a - k:b - k]
+    bd = bed_span(s0, s1 + 1, seed)
+    bd *= cal["bed_rms"] / bed_unit
+    dry[:, 0] += bd[:n]
+    dry[:, 1] += bd[37:n + 37]
+    ir = cal["ir"]
+    x = dry + np.stack([fftconvolve(dry[:, c], ir[:, c])[:n] for c in range(2)], 1)
+    d = len(fir) // 2
+    x = np.stack([fftconvolve(x[:, c], fir)[d:d + n] for c in range(2)], 1)
+    a = int(round((t0 - s0) * SR))
+    return x[a:a + int(round(dur * SR))]
+
+
+def bed_unit_rms(seed):
+    """背景の粒（倍率をかける前）のRMS。最初の60秒で測る"""
+    b = bed_span(0, 60, seed)
+    return np.sqrt((b ** 2).mean())
