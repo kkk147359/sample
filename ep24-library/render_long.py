@@ -1,7 +1,7 @@
 """図書館の長い版・試聴の書き出し。2分ずつ区切って計算し（4コアで並列）、ffmpeg で書く。
 使い方: python3 render_long.py <出力(.m4a|.mp3)> <秒数> <シード>
 音色と背景の大きさは、社長に出した試聴版A（render(90, 7)）から求めた補正にそろえる。
-音量は最初の6分を測って -24LUFS 付近になる一定の倍率をかけ、ピークは alimiter（-1dBFS）で抑える（動的な圧縮はしない）。
+音量は最初の6分を測って -24LUFS 付近になる一定の倍率をかけ、ピークは alimiter（-3dBFS、AACにしたあとも0dBを超えないように）で抑える（動的な圧縮はしない）。
 """
 import re
 import subprocess
@@ -51,7 +51,7 @@ if __name__ == "__main__":
         gain = 10 ** ((TARGET - lufs(head)) / 20)
         print(f"gain {20 * np.log10(gain):.1f}dB", flush=True)
         ff = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "f32le", "-ar", str(SR), "-ac", "2", "-i", "-",
-                               "-af", "alimiter=limit=0.89:attack=5:release=50:level=false", "-ar", str(SR)] + codec + [out],
+                               "-af", "alimiter=limit=0.71:attack=5:release=50:level=false", "-ar", str(SR)] + codec + [out],
                               stdin=subprocess.PIPE)
         maxpk = 0
         for k0 in range(0, nblk, 8):
