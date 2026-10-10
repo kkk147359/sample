@@ -15,6 +15,12 @@ SR = 44100
 CENT = np.array([31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000])
 # 実録音3本の平均に近い目標（dB、最大0）
 T_DB = np.array([-12, -9, -5, 0, 0, -3, -5, -11, -16, -18, -22, -28, -34, -42, -49, -55, -60, -63, -66], float)
+SHIFT = 1.0  # 音の高さ。1.0＝実録音どおり。10/10 社長「もう少しだけ音を高く」→ 1.4（半オクターブ）・2.0（1オクターブ）を試作
+
+
+def target():
+    """目標の配分を SHIFT 倍の高さへずらしたもの（CENT の各点の値）"""
+    return np.interp(np.log2(CENT), np.log2(CENT * SHIFT), T_DB, left=-14, right=-70)
 
 
 def _sos(kind, f, order=2):
@@ -50,14 +56,14 @@ def beat(rng, per):
     n = int(0.75 * SR)
     y = np.zeros(n)
     # S1：2つの山（20〜35ms ずれ）
-    a = burst(rng, rng.uniform(0.09, 0.12), rng.uniform(0.024, 0.034), rng.uniform(140, 180))
-    b = burst(rng, rng.uniform(0.07, 0.10), rng.uniform(0.015, 0.025), rng.uniform(150, 200)) * 10 ** (rng.uniform(-4, -1) / 20)
+    a = burst(rng, rng.uniform(0.09, 0.12), rng.uniform(0.024, 0.034), rng.uniform(140, 180) * SHIFT)
+    b = burst(rng, rng.uniform(0.07, 0.10), rng.uniform(0.015, 0.025), rng.uniform(150, 200) * SHIFT) * 10 ** (rng.uniform(-4, -1) / 20)
     y[:len(a)] += a
     k = int(rng.uniform(0.020, 0.035) * SR)
     y[k:k + len(b)] += b
     # S2：S1 から約0.33秒（間隔に合わせて少し変わる）、2〜5dB 小さく少し高い
     k2 = int((0.33 * (per / 1.0) ** 0.5 + rng.normal(0, 0.005)) * SR)
-    c = burst(rng, rng.uniform(0.07, 0.09), rng.uniform(0.012, 0.02), rng.uniform(190, 240), hp=50) * 10 ** (rng.uniform(-3.5, -0.5) / 20)
+    c = burst(rng, rng.uniform(0.07, 0.09), rng.uniform(0.012, 0.02), rng.uniform(190, 240) * SHIFT, hp=50) * 10 ** (rng.uniform(-3.5, -0.5) / 20)
     y[k2:k2 + len(c)] += c
     return y
 
@@ -73,7 +79,7 @@ def calibrate(seed=5, dur=60):
     P = np.abs(np.fft.rfft(x)) ** 2
     have = np.array([P[(f >= c / 2 ** (1 / 6)) & (f < c * 2 ** (1 / 6))].sum() for c in CENT])
     have = 10 * np.log10(have / have.max() + 1e-12)
-    return np.clip(T_DB - have, -15, 12)
+    return np.clip(target() - have, -15, 12)
 
 
 def eq_fir(corr, taps=8193):
