@@ -132,11 +132,12 @@ def schedule(dur, seed):
             p += rng.uniform(1.0, 1.8)
             ev.append((p, "pull", -rng.uniform(6, 9), rng.uniform(0.5, 0.9)))
         # 持ち替えの間も無音にしない：ごく小さな布の音をまばらに
+        nxt = p + rng.uniform(1.5, 2.6)
         q = t + 0.2
-        while q < p + 1.5:
+        while q < nxt - 0.4:
             ev.append((q, "cloth", -rng.uniform(9, 12), rng.uniform(0.7, 1.2)))
             q += rng.uniform(0.5, 0.9)
-        t = p + rng.uniform(1.5, 2.6)
+        t = nxt
     return ev
 
 
