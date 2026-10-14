@@ -20,7 +20,8 @@ from scipy.signal import butter, fftconvolve, sosfilt
 
 SR = 44100
 BED_DB = -16.0  # 下地（200Hz〜6kHz の平均）に対し、フクロウの声の強いところとの差の目安
-WET = 0.35  # 森の残響の混ぜ具合（残響の音量は声の約 -9dB）
+WET = 0.07  # 森の残響の混ぜ具合（声が終わって 50ms 後 -11〜-15dB、200ms 後 -13〜-19dB。実録音 -8〜-17／-14〜-15dB）
+RT = 2.6  # 森の残響が 60dB 下がるまでの秒数（実録音の遠くのフクロウ 2.5〜3.0秒、#825822）
 
 
 def _bp(lo, hi, order=2):
@@ -114,7 +115,7 @@ def phrase(kind, who, rng):
     return notes
 
 
-def forest_ir(rng, rt=1.2):
+def forest_ir(rng, rt=RT):
     """遠くの森の残響（こもった、左右で違う）"""
     n = int(rt * 1.3 * SR)
     t = np.arange(n) / SR
@@ -127,16 +128,22 @@ def forest_ir(rng, rt=1.2):
     return out
 
 
+# 間の空気の音の高さの配分（1/3オクターブ、最大=0dB）。実録音の静かな夜の森（freesound #367964）に合わせ、
+# 4kHz より上だけは少し控えめにする（サーという音にしない）。
+AIR_SHAPE = [(60, -36), (100, -24), (125, -20), (160, -18), (200, -13), (250, -5), (315, -2), (400, 0), (500, -4),
+             (630, -6), (800, -7), (1000, -7), (1250, -9), (1600, -11), (2000, -13), (2500, -15), (3150, -17),
+             (4000, -20), (5000, -25), (6300, -29), (8000, -33), (12000, -40)]
+
+
 def night_air(n, rng):
-    """夜の空気：やわらかい雑音。150Hz より下を切り（低音の圧迫感を避ける）、150〜800Hz はなだらか（-3dB/oct）、
-    1kHz より上は下げる（サーという音にしない）。大きさは一定（風に聞こえないよう揺らさない）。"""
+    """夜の空気：AIR_SHAPE の配分のやわらかい雑音。大きさは一定（風に聞こえないよう揺らさない）。"""
     w = rng.normal(0, 1, n)
     W = np.fft.rfft(w)
     f = np.fft.rfftfreq(n, 1 / SR)
-    g = 1 / np.sqrt(np.maximum(f, 150) / 150)  # -3dB/oct
-    g *= 1 / (1 + (150 / np.maximum(f, 1)) ** 4)  # 150Hz より下を急に切る
-    g *= 1 / np.sqrt(1 + (f / 900) ** 4)  # 900Hz より上を下げる
-    b = np.fft.irfft(W * g, n)
+    fs, db = np.array(AIR_SHAPE, float).T
+    # 1/3オクターブの帯域あたりの値なので、周波数ごとの強さに直す（帯域幅は周波数に比例 → -10log10(f)）
+    g_db = np.interp(np.log(np.maximum(f, 20)), np.log(fs), db, left=-60, right=-50) - 10 * np.log10(np.maximum(f, 20) / 400)
+    b = np.fft.irfft(W * 10 ** (g_db / 20), n)
     return b / (np.std(b) + 1e-12)
 
 

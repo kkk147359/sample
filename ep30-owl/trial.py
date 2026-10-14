@@ -1,5 +1,5 @@
 """試聴版。使い方: python3 trial.py <出力.mp3> [秒数=150] [seed=1] [下地dB=-16]
-音量は一定の倍率で、声の強いところ（10msごとの最大）を -12dBFS にそろえる（loudnorm は使わない：間の静けさを持ち上げないため）。"""
+音量は一定の倍率で、声の強いところ（10msごとの最大）を -9dBFS にそろえる（loudnorm は使わない：間の静けさを持ち上げないため）。"""
 import subprocess, sys
 import numpy as np
 import synth_owl
@@ -15,7 +15,7 @@ print("鳴く時刻:", ", ".join(f"{t:.0f}s {k}{'(遠)' if w else ''}" for t, k,
 x = render(0.0, dur, ev, seed)
 h = 441
 e = np.sqrt((x[: len(x) // h * h, 0].reshape(-1, h) ** 2).mean(1))
-x *= 10 ** (-12 / 20) / (np.sqrt(2) * e.max())
+x *= 10 ** (-9 / 20) / (np.sqrt(2) * e.max())
 fade = int(3 * SR)
 x[:fade] *= np.linspace(0, 1, fade)[:, None]
 x[-fade:] *= np.linspace(1, 0, fade)[:, None]
