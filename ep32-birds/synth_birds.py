@@ -153,7 +153,7 @@ def garden_air(n, rng):
     return b * 10 ** (1.5 * _smooth(n, 0.08, rng) / 20)
 
 
-def render(start, dur, events, seed):
+def render(start, dur, events, seed, with_bed=True):
     n = int(dur * SR)
     pad = int(3.0 * SR)
     L = np.zeros(n + 2 * pad)
@@ -176,6 +176,8 @@ def render(start, dur, events, seed):
     irs = garden_ir(np.random.default_rng(seed + 7))
     mono = 0.5 * (L + R)
     st = [L + WET * fftconvolve(mono, irs[0])[: len(L)], R + WET * fftconvolve(mono, irs[1])[: len(R)]]
+    if not with_bed:
+        return np.stack(st, 1)[pad: pad + n]
     ref = 0.5  # 1声の強いところの目安
     out = []
     for c in range(2):
@@ -185,3 +187,32 @@ def render(start, dur, events, seed):
         bed *= ref * 10 ** (BED_DB / 20) / (hb + 1e-12)
         out.append(st[c] + bed)
     return np.stack(out, 1)[pad: pad + n]
+
+
+# ---- 長い版用：区切りのない下地（ブロックの境目で途切れないよう、FIR で作り、ゆれは絶対時刻で決める） ----
+FIR_N = 16384
+
+
+def air_fir():
+    """garden_air と同じ配分の FIR（白色雑音を通すと標準偏差 1）"""
+    f = np.fft.rfftfreq(FIR_N, 1 / SR)
+    fs, db = np.array(AIR_SHAPE, float).T
+    g = np.interp(np.log(np.maximum(f, 20)), np.log(fs), db, left=-60, right=-50) - 10 * np.log10(np.maximum(f, 20) / 400)
+    h = np.roll(np.fft.irfft(10 ** (g / 20), FIR_N), FIR_N // 2) * np.hanning(FIR_N)
+    return h / np.sqrt((h ** 2).sum())
+
+
+def bed_gain():
+    """trial と同じ基準：下地の 1.5〜8kHz を ref*BED_DB にそろえる倍率"""
+    w = np.random.default_rng(99).normal(0, 1, 20 * SR)
+    b = fftconvolve(w, air_fir())[FIR_N: FIR_N + 20 * SR]
+    hb = np.sqrt(np.mean(sosfilt(_bp(1500, 8000), b) ** 2))
+    return 0.5 * 10 ** (BED_DB / 20) / hb
+
+
+def bed_swell(t, seed):
+    """絶対時刻 t 秒でのゆっくりしたゆれ（±1.5dB 前後、12.5秒ごとの点をつなぐ）"""
+    step = 12.5
+    k = int(t.max() / step) + 3
+    pts = np.random.default_rng((seed, 555)).uniform(-1, 1, k)
+    return 10 ** (1.5 * np.interp(t / step, np.arange(k), pts) / 20)
