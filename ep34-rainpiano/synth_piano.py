@@ -50,7 +50,7 @@ def note(m, vel, dur, seed):
             fs = fk * 2 ** (det[s] / 1200)
             x += (a / nstr) * env * np.sin(2 * np.pi * fs * t + r.uniform(0, 2 * np.pi))
     # 打鍵の立ち上がり（ハンマーはやわらかいので数ms）
-    att = 0.004 + 0.006 * (1 - vel)
+    att = 0.006 + 0.008 * (1 - vel)
     x *= 1 - np.exp(-t / att)
     # ハンマー・鍵盤の小さなノイズ
     nn = int(0.04 * SR)
@@ -87,6 +87,7 @@ def compose(total, seed, key=63, bpm=58):
     last_mel = 9  # 右手の度数（主音から数えて、1オクターブ上の3度あたり）
     while t < total:
         bars = int(r.choice([2, 3, 4]))
+        first = len(ev)  # 句の始まり（間のあと）の音は少し弱く入る（急な音にしない）
         for b in range(bars):
             # 和音を選ぶ（直前と同じものは避け、同じ4つ組の繰り返しもしにくい）
             ch = int(r.choice(MOVES[ch]))
@@ -112,11 +113,14 @@ def compose(total, seed, key=63, bpm=58):
                 d = cands[0] if cands[0] != last_mel or r.random() < 0.2 else cands[1]
                 last_mel = d
                 m = deg_midi(key, d, 0)
-                ev.append((tm, m, r.uniform(0.36, 0.5), beat * r.uniform(1.2, 2.8)))
+                ev.append((tm, m, r.uniform(0.34, 0.46), beat * r.uniform(1.2, 2.8)))
                 tm += beat * float(r.choice([0.5, 1, 1, 1, 1.5, 2]))
                 if tm > t + bar:
                     break
             t += bar
+        for j in range(first, len(ev)):
+            if ev[j][0] < ev[first][0] + 1.5 * beat:
+                ev[j] = (ev[j][0], ev[j][1], ev[j][2] * 0.78, ev[j][3])
         # 句のあとの間（雨だけになる時間）
         t += r.uniform(2.0, 5.0)
         if r.random() < 0.25:
