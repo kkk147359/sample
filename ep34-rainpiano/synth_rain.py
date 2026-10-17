@@ -1,9 +1,9 @@
 """晩秋の夜、落ち葉に降る静かな雨（実録音の測定は REFERENCES.md）。
 3つの層でできている：
 1. 下地：遠くの雨のサーという音。1/3オクターブ配分を実録音の「森・庭の雨」に合わせ、150Hz以下は切り、3kHz以上は下げる。
-   帯域ごとのゆらぎは数秒単位と、もう少し速い細かな揺れ（風に聞こえる単調な上下にしない）。
+   強弱は30〜120秒でゆっくり ±0.5dB だけ（10/17 社長「普通の雨はもっと一定」）。
 2. 落ち葉に当たる粒：短い「パラ」という粒を多数。1粒ごとに高さ（共鳴）・強さ・左右が違う。
-3. 枝や軒から落ちる大きめのしずく：1分に数十滴、周りより中央値10dB前後（ep18の窓の雨より丸く低い）。
+3. 枝や軒から落ちる大きめのしずく（10/17 社長指示で外した。drip_rate=0）。
 render(t0, dur, seed) で区間ごとに書き出せる（各粒は番号で決まるので区切りに依存しない）。
 """
 import numpy as np
@@ -17,12 +17,13 @@ TARGET = np.array([-60.0, -50.0, -42.0, -34.0, -26.0, -20.0, -16.0, -13.0, -11.0
                    -0.3, -0.7, -1.2, -2.5, -5.9, -9.2, -9.7, -10.5, -13.9, -17.3])
 NFIR = 1 << 13
 PARAMS = dict(
-    patter_rate=9.0,     # 落ち葉の粒（1秒あたり）
-    patter_db=6.0,      # 粒の強さ（下地比、dB）
-    drip_rate=50 / 60,   # 大きめのしずく（1秒あたり）
-    drip_db=15.0,         # しずくの強さ（周りの雨 900Hz〜3.5kHz 比の目安）
-    mod_slow_db=1.2,     # 数秒単位のゆらぎ
-    mod_fast_db=0.8,     # 0.3〜1秒の細かなゆらぎ
+    patter_rate=14.0,    # 落ち葉の粒（1秒あたり）。間隔をそろえ気味にして下地になじませる
+    patter_db=3.0,       # 粒の強さ（下地比、dB）
+    patter_sigma=0.5,    # 粒の間隔のばらつき（大きいとかたまって聞こえる）
+    drip_rate=0.0,       # 大きめのしずく：10/17 社長「ポコンという音はいらない」で外した
+    drip_db=15.0,
+    mod_slow_db=0.5,     # 30〜120秒でゆっくり変わる少しの強弱（10/17 社長「波打って聞こえる」で 1.2→0.5dB、周期も長く）
+    mod_fast_db=0.0,     # 細かなゆらぎは外す（雑音そのもののゆらぎで実録音の 0.9〜1.6dB に届く）
 )
 
 
@@ -38,8 +39,8 @@ def bed_fir():
 
 def _mod(t, seed, c):
     """ゆらぎ（dB）。正弦の和なので、どこから計算しても同じ値"""
-    r = np.random.default_rng([seed, 31, c])
-    fs = r.uniform(0.04, 0.25, 5); ps = r.uniform(0, 2 * np.pi, 5)
+    r = np.random.default_rng([seed, 31])  # 左右で同じ強弱（左右で別に揺れると波打って聞こえる）
+    fs = r.uniform(1 / 120, 1 / 30, 5); ps = r.uniform(0, 2 * np.pi, 5)
     ff = r.uniform(0.8, 3.0, 7); pf = r.uniform(0, 2 * np.pi, 7)
     slow = sum(np.sin(2 * np.pi * a * t + b) for a, b in zip(fs, ps)) / np.sqrt(2.5)
     fast = sum(np.sin(2 * np.pi * a * t + b) for a, b in zip(ff, pf)) / np.sqrt(3.5)
@@ -51,11 +52,13 @@ def events(total, seed):
     r = np.random.default_rng([seed, 5])
     ev = []
     for kind, rate in ((0, PARAMS["patter_rate"]), (1, PARAMS["drip_rate"])):
+        if rate <= 0:
+            continue
         t = 0.0
+        sig = PARAMS["patter_sigma"] if kind == 0 else 0.85
         while t < total:
-            # ばらつきの大きい間隔（雨粒はかたまって落ちる）
-            t += r.lognormal(np.log(0.75 / rate), 0.85)
-            sd = r.normal(0, 3.0 if kind == 0 else 2.5)
+            t += r.lognormal(np.log(1 / rate) - sig ** 2 / 2, sig)
+            sd = r.normal(0, 2.0 if kind == 0 else 2.5)
             ev.append((t, kind, sd, r.uniform(-0.85, 0.85), int(r.integers(1 << 30))))
     ev.sort()
     return ev
