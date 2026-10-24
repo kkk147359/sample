@@ -12,3 +12,15 @@ python3 ../tools/guitar_profile.py v2.wav 5 170   # 実録音と同じ物差し�
 ```
 
 実録音14本との比較は `/mnt/project-files/research/ep36_ガットギター_実録音測定.md`。
+
+## 長い版・映像・メタデータ（10/24 社長OK のあと）
+
+| ファイル | 役割 |
+|---|---|
+| `render_long.py` | 長い版。`python3 render_long.py out/ep36_1h.m4a 3600 3601 160k`／`python3 render_long.py out/ep37_8h.m4a 28800 28801 128k`（8時間版は添付できる大きさにするため音声128k） |
+| `make_visual.py` | 背景（灯りを落とした部屋・椅子に立てかけたギター・たたんだ毛布・窓の外に落ちる葉）・サムネイル・冒頭映像 |
+| `make_short.py` | ショート（縦28秒、1時間版の1325秒目から）とカバー |
+| `make_meta.py` | タイトル・説明文・タグと規定チェック |
+
+組み立て：`python3 ../tools/assemble.py assets/intro.mp4 out/ep36_1h.m4a 3600 out/ep36_1h.mp4`。
+検査：`../tools/sudden_long.py`（急な音・無音・4〜5kHz）、`../tools/guitar_profile.py`（実録音との比較）。
