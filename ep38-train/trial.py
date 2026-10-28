@@ -1,4 +1,4 @@
-"""夜行列車の試聴版。使い方: python3 trial.py <出力.mp3> [秒数=30] [seed=38] [継ぎ目dB=-2] [時速km=60]"""
+"""夜行列車の試聴版。使い方: python3 trial.py <出力.mp3> [秒数=30] [seed=38] [継ぎ目dB=-2] [時速km=60] [タタンの間の秒数（省略時は軸距2.1mから）]"""
 import subprocess, sys
 import numpy as np
 import synth_train
@@ -10,6 +10,8 @@ seed = int(sys.argv[3]) if len(sys.argv) > 3 else 38
 cdb = float(sys.argv[4]) if len(sys.argv) > 4 else -2.0
 if len(sys.argv) > 5:
     synth_train.SPEED = float(sys.argv[5]) / 3.6
+if len(sys.argv) > 6:
+    synth_train.AXLE = float(sys.argv[6]) * synth_train.SPEED
 x = render(dur + 1, seed, cdb)[: int(dur * SR)]
 x /= np.abs(x).max()
 fade = int(3 * SR)
