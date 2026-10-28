@@ -57,7 +57,7 @@ def soft_band(x, lo, hi):
     return np.fft.irfft(np.fft.rfft(x) * g, len(x))
 
 
-def rumble(dur, rng):
+def rumble(dur, rng, gseed=None):
     n = int(dur * SR)
     out = np.zeros((n, 2))
     for ch in range(2):
@@ -65,9 +65,10 @@ def rumble(dur, rng):
         x = shaped_noise(n, r, RUMBLE)
         lo, mid, hi = band(x, 0, 200), band(x, 200, 1000), band(x, 1000, SR / 2)
         # 帯域ごとに別のランダムな変化（実録音のゆらぎ1〜3dB）。左右は共通成分を多くして揺れを感じさせない
-        out[:, ch] = lo * slow_gain(n, np.random.default_rng(11), 1.2, 1.7) \
-            + mid * slow_gain(n, np.random.default_rng(12 + ch), 2.0, 0.9) \
-            + hi * slow_gain(n, np.random.default_rng(13), 1.4, 1.1)
+        g = (11, 12, 13) if gseed is None else (gseed * 10 + 1, gseed * 10 + 2, gseed * 10 + 3)
+        out[:, ch] = lo * slow_gain(n, np.random.default_rng(g[0]), 1.2, 1.7) \
+            + mid * slow_gain(n, np.random.default_rng(g[1] + ch * (1 if gseed is None else 100000)), 2.0, 0.9) \
+            + hi * slow_gain(n, np.random.default_rng(g[2]), 1.4, 1.1)
     return out
 
 
