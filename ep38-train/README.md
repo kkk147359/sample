@@ -11,7 +11,7 @@ python3 trial.py out.mp3 30 38 -1 35 0.29     # 試聴版（社長OKの D2：時
 |---|---|
 | `synth_train.py` | 走行音（整形ノイズ＋帯域ごとのランダムな小さい変化）と継ぎ目の打音・時刻 |
 | `trial.py` | 30秒の試聴版。引数で継ぎ目の大きさ・時速・タタンの間を変えられる |
-| `render_long.py` | 長い版。`python3 render_long.py out/ep38_1h.m4a 3600 3801 160k`／`python3 render_long.py out/ep39_8h.m4a 28800 3901 128k`（8時間版は添付できる大きさにするため音声128k） |
+| `render_long.py` | 長い版。`python3 render_long.py out/ep38_1h.m4a 3600 3801 160k`／`python3 render_long.py out/ep39_8h.m4a 28800 3901 128k`。8時間版は128kでも動画が533MBになり添付の上限（約500MB）を超えるため、`ffmpeg -i out/ep39_8h.m4a -c:a aac -b:a 112k out/ep39_8h_112k.m4a` で112kにしてから組み立てた（約470MB） |
 | `make_visual.py` | 背景（夜行列車の車内から見る窓、遠くの町の灯りが流れる）・サムネイル・冒頭映像 |
 | `make_short.py` | ショート（縦28秒、1時間版の1200秒目から）とカバー |
 | `make_meta.py` | タイトル・説明文・タグと規定チェック |
